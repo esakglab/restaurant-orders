@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: restaurant-orders
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - {key: SUPABASE_URL, sync: false}
+      - {key: SUPABASE_SERVICE_KEY, sync: false}
+      - {key: JWT_SECRET, generateValue: true}
+      - {key: OWNER_PHONE, sync: false}
+      - {key: OWNER_PASSWORD, sync: false}
+      - {key: ADMIN_PHONE, sync: false}
+      - {key: ADMIN_PASSWORD, sync: false}
+      - {key: TZ_OFFSET, value: "6"}
