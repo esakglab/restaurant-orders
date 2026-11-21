@@ -1,0 +1,22 @@
+-- Выполнить ПОСЛЕ schema.sql (несколько объектов, логины, сотрудники по именам)
+create table if not exists venues(id bigserial primary key, owner_id uuid references users(id), name text not null, logo text, welcome text default 'Добро пожаловать!', points jsonb default '["Главный зал"]', address text, lat double precision, lng double precision, created_at timestamptz default now());
+create table if not exists staff(id bigserial primary key, venue_id bigint references venues(id) on delete cascade, name text not null, position text);
+alter table venues enable row level security; alter table staff enable row level security;
+alter table users add column if not exists venue_id bigint references venues(id) on delete set null;
+alter table users add column if not exists login text;
+update users set login=lower(phone) where login is null;
+alter table users alter column login set not null;
+create unique index if not exists users_login on users(login);
+alter table users drop constraint if exists users_phone_key;
+alter table users alter column phone drop not null;
+alter table menu add column if not exists venue_id bigint references venues(id) on delete cascade;
+alter table orders add column if not exists venue_id bigint references venues(id);
+insert into venues(owner_id,name,welcome,points) select (select id from users where role='owner' limit 1),name,welcome,points from settings where not exists(select 1 from venues);
+update menu set venue_id=(select min(id) from venues) where venue_id is null;
+update orders set venue_id=(select min(id) from venues) where venue_id is null;
+insert into staff(venue_id,name) select (select min(id) from venues),name from users where role='staff';
+update users set venue_id=(select min(id) from venues) where role='admin' and venue_id is null;
+delete from users where role='staff';
+alter table users drop constraint if exists users_role_check;
+alter table users add constraint users_role_check check(role in('owner','admin','terminal','customer'));
+create index if not exists menu_venue on menu(venue_id); create index if not exists orders_venue on orders(venue_id);

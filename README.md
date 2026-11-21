@@ -1,14 +1,11 @@
-# Заказ еды: 4 приложения в одном сервисе
-`/` клиенты · `/staff` приём заказов · `/admin` администратор · `/owner` владелец
+# Заказ еды: несколько заведений, 4 приложения
+`/` клиенты · `/staff` приём заказов · `/admin` администратор · `/owner` владелец. Каждое можно установить как приложение (кнопка «Установить» или меню браузера; на iPhone: «Поделиться → На экран Домой»).
 
 ## Запуск
-1. Supabase → SQL Editor → выполнить `schema.sql`. Settings → API → скопировать Project URL и service_role key.
-2. Залить папку на GitHub (`.env` и `backup*.json` в .gitignore).
-3. Render → New → Blueprint → выбрать репозиторий (`render.yaml`). Заполнить: SUPABASE_URL, SUPABASE_SERVICE_KEY, OWNER_PHONE / OWNER_PASSWORD, ADMIN_PHONE / ADMIN_PASSWORD (пароли от 12 символов).
-4. Войти на `/owner` и `/admin`, добавить сотрудников в `/admin`.
+1. Supabase → SQL Editor → выполнить `schema.sql`, затем `migration_2.sql`.
+2. Залить все файлы на GitHub (в корень, без папок).
+3. Render: SUPABASE_URL, SUPABASE_SERVICE_KEY, JWT_SECRET, OWNER_PHONE, OWNER_PASSWORD, TZ_OFFSET=6.
+4. `/owner` → объект → «Управление» (название, логотип, адрес, сотрудники, меню) → «Доступы» (логин и пароль для /staff и /admin).
 
 ## Сохранность данных
-Владелец → «Скачать резервную копию» (раз в неделю). Восстановление в новый Supabase: выполнить `schema.sql`, затем `node restore.js backup.json`. Файл содержит хэши паролей — храните закрыто.
-
-## Защита
-service_role-ключ только на сервере; RLS включён на всех таблицах; пароли bcrypt; JWT 12 ч; лимиты запросов; helmet/CSP; цены берутся из БД, а не от клиента; весь вывод экранируется.
+`/owner` → «Скачать резервную копию». Восстановление: `schema.sql`, `migration_2.sql`, затем `node restore.js backup.json`. Файл содержит хэши паролей — храните закрыто.
