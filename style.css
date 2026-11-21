@@ -38,3 +38,4 @@ a.btn{display:block;text-align:center;text-decoration:none}
 .tbl{padding:14px 8px;border-radius:12px;border:1px solid var(--b);font:inherit;color:#0b2a1a;cursor:pointer;display:flex;flex-direction:column;gap:2px;transition:transform .15s}.tbl:active{transform:scale(.96)}
 .tbl.free{background:#8fe3a8}.tbl.busy{background:#f6b6d0;color:#4a0f2a}.tbl.sel{background:var(--a)}.tbl:disabled{opacity:.7;cursor:not-allowed}.tbl small{font-size:12px}
 .sheet{max-height:48vh;overflow:auto;margin:8px 0}.sheet h4{margin:10px 0 2px}
+.dimg{width:100%;max-height:220px;object-fit:cover;border-radius:12px}.dish .more{align-self:flex-start;padding:0;color:var(--p);font-size:14px}

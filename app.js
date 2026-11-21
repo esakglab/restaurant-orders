@@ -31,7 +31,7 @@ async function shop(){
   $('#app').innerHTML=head(S.name,`${vs.length>1?'<button class="ghost" data-sw title="Другое заведение">⇄</button>':''}<button class="ghost" id="bl">🔔${un?`<i class="dot">${un}</i>`:''}</button>`,S.logo)+
   (bell?`<div class="card pop">${me.notifs.map(n=>`<p class="${n.read?'':'new'}">${esc(n.text)} <small>${hm(n.created_at)}</small></p>`).join('')||'Уведомлений пока нет'}</div>`:'')+
   `<section class="card hero"><h1>${esc(S.name)}</h1><p>${esc(S.welcome||'')}</p></section>`+
-  [...new Set(menu.map(m=>m.category))].map(c=>`<h3>${esc(c)}</h3><div class="grid">${menu.filter(m=>m.category===c).map(m=>`<div class="card dish">${m.photo?`<img src="${esc(m.photo)}" alt="" loading="lazy">`:'<div class="ph">🍽️</div>'}<b>${esc(m.name)}</b><span>${money(m.price)}</span>${cart[m.id]?qty(m.id):`<button class="btn" data-d="1" data-id="${m.id}">В корзину</button>`}</div>`).join('')}</div>`).join('')+
+  [...new Set(menu.map(m=>m.category))].map(c=>`<h3>${esc(c)}</h3><div class="grid">${menu.filter(m=>m.category===c).map(m=>`<div class="card dish">${m.photo?`<img src="${esc(m.photo)}" alt="" loading="lazy">`:'<div class="ph">🍽️</div>'}<b>${esc(m.name)}</b><span>${money(m.price)}</span>${m.description?`<button class="ghost more" data-i="${m.id}">Подробнее</button>`:''}${cart[m.id]?qty(m.id):`<button class="btn" data-d="1" data-id="${m.id}">В корзину</button>`}</div>`).join('')}</div>`).join('')+
   `<section class="card"><h3>Корзина</h3>${its().map(i=>`<div class="row"><span>${esc(menu.find(x=>x.id===i.id).name)}</span>${qty(i.id)}<button class="ghost" data-x="${i.id}" title="Убрать">✕</button></div>`).join('')||'<p>Добавьте блюда из меню</p>'}
   <div class="row"><b>Итого</b><b>${money(tot())}</b></div>
   <div class="seg">${Object.entries(TY).map(([k,v])=>`<label><input type="radio" name="type" value="${k}" ${f.type===k?'checked':''}>${v}</label>`).join('')}</div>
@@ -41,6 +41,8 @@ async function shop(){
   if(a){const e=$(`[name=${a}]`);e&&e.focus()}}
  H.click=async e=>{const b=e.target.closest('button');if(!b)return;const d=b.dataset;
   if(d.d){cart[d.id]=(cart[d.id]||0)+ +d.d;if(cart[d.id]<1)delete cart[d.id];draw()}
+  else if(d.i){const m=menu.find(x=>x.id==d.i),el=document.createElement('div');el.className='modal';el.innerHTML=`<div class="card">${m.photo?`<img class="dimg" src="${esc(m.photo)}" alt="">`:''}<h3>${esc(m.name)}</h3><p><b>${money(m.price)}</b></p><p>${esc(m.description||'')}</p><button class="btn" data-add="${m.id}">В корзину</button><button class="ghost" data-c>Закрыть</button></div>`;
+   el.onclick=ev=>{const x=ev.target.closest('button'),y=x?x.dataset:{};if(y.add){cart[y.add]=(cart[y.add]||0)+1;draw()}if(y.add||y.c!==undefined||ev.target===el)el.remove()};document.body.append(el)}
   else if(d.tb){f.table=d.tb;draw()}
   else if(d.x){delete cart[d.x];draw()}
   else if(b.hasAttribute('data-sw')){localStorage.sv='';shop()}
@@ -90,7 +92,7 @@ async function desk(kind){
 let AM=[],AV={};
 async function adminHTML(){const [i,st,tb,wt]=await Promise.all([api('info?v='+VID()),api('admin/staff'),api('tables?v='+VID()),api('admin/waiters')]),v=AV=i.venue;AM=i.menu;
  return `<form class="card" data-f="vf"><h3>Заведение</h3><input name="name" value="${esc(v.name)}" placeholder="Название" required><input name="logo" value="${esc(v.logo||'')}" placeholder="Логотип: ссылка https://…"><textarea name="welcome" placeholder="Приветствие">${esc(v.welcome||'')}</textarea><textarea name="points" placeholder="Точки выдачи — по одной в строке">${esc((v.points||[]).join('\n'))}</textarea><input name="address" value="${esc(v.address||'')}" placeholder="Адрес"><div class="seg"><input name="lat" value="${v.lat??''}" placeholder="Широта"><input name="lng" value="${v.lng??''}" placeholder="Долгота"></div><button type="button" class="ghost" data-geo>📍 Определить по моему положению</button><button class="btn">Сохранить</button></form>
- <form class="card" data-f="mf"><h3>Блюдо</h3><input type="hidden" name="id"><input name="name" placeholder="Название" required><input name="category" placeholder="Раздел (Горячее, Напитки…)"><input name="price" type="number" min="0" step="0.01" placeholder="Цена" required><input name="photo" placeholder="Фото: ссылка https://…"><button class="btn">Сохранить блюдо</button></form>
+ <form class="card" data-f="mf"><h3>Блюдо</h3><input type="hidden" name="id"><input name="name" placeholder="Название" required><input name="category" placeholder="Раздел (Горячее, Напитки…)"><input name="price" type="number" min="0" step="0.01" placeholder="Цена" required><input name="photo" placeholder="Фото: ссылка https://…"><textarea name="description" placeholder="Описание, состав (кнопка «Подробнее»)"></textarea><button class="btn">Сохранить блюдо</button></form>
  <div class="grid">${AM.map(m=>`<div class="card row"><span>${esc(m.name)}<br><small>${money(m.price)}</small></span><span><button class="ghost" data-e="${m.id}" title="Изменить">✎</button><button class="ghost" data-m="${m.id}" title="Удалить">🗑</button></span></div>`).join('')}</div>
  <form class="card" data-f="tf"><h3>Сотрудники (выбирают своё имя при приёме заказа)</h3><input name="name" placeholder="Имя" required><input name="position" placeholder="Должность (официант, повар…)"><button class="btn">Добавить</button>${st.map(u=>`<div class="row"><span>${esc(u.name)} <small>${esc(u.position||'')}</small></span><button type="button" class="ghost" data-s="${u.id}" title="Удалить">🗑</button></div>`).join('')}</form>
  <form class="card" data-f="bf"><h3>Столы</h3><input name="count" type="number" min="0" max="100" value="${tb.length}" placeholder="Сколько столов"><button class="btn">Сохранить</button></form>
@@ -99,7 +101,7 @@ const adminH=R=>({
  async submit(e){e.preventDefault();const t=e.target.dataset.f,f=Object.fromEntries(new FormData(e.target));
   try{await api(({vf:'admin/venue',mf:'admin/menu',bf:'admin/tables',wf:'admin/waiters'})[t]||'admin/staff','POST',t==='vf'?{...f,points:f.points.split('\n')}:f);toast('Сохранено ✅');await R()}catch(x){toast(x.message)}},
  async click(e){const d=e.target.dataset;try{
-  if(d.e){const m=AM.find(x=>x.id==d.e);for(const k of['id','name','category','price','photo'])$(`[data-f=mf] [name=${k}]`).value=m[k]??'';$('[data-f=mf]').scrollIntoView({behavior:'smooth'})}
+  if(d.e){const m=AM.find(x=>x.id==d.e);for(const k of['id','name','category','price','photo','description'])$(`[data-f=mf] [name=${k}]`).value=m[k]??'';$('[data-f=mf]').scrollIntoView({behavior:'smooth'})}
   if(d.geo!==undefined)navigator.geolocation.getCurrentPosition(p=>{$('[name=lat]').value=p.coords.latitude.toFixed(6);$('[name=lng]').value=p.coords.longitude.toFixed(6)},()=>toast('Нет доступа к геолокации'));
   if(d.m&&confirm('Удалить блюдо?')){await api('admin/menu/'+d.m,'DELETE');await R()}
   if(d.s&&confirm('Удалить сотрудника?')){await api('admin/staff/'+d.s,'DELETE');await R()}

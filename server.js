@@ -28,7 +28,7 @@ app.post('/api/login',authRl,wrap(async(q,s)=>{const l=str(q.body.login,40).toLo
 
 // --- публичное ---
 app.get('/api/venues',wrap(async(q,s)=>{const {data}=await db.from('venues').select('id,name,logo,welcome').order('id');s.json(data||[])}));
-app.get('/api/info',wrap(async(q,s)=>{const v=+q.query.v||0;const [a,b]=await Promise.all([db.from('venues').select('id,name,logo,welcome,points,address,lat,lng').eq('id',v).maybeSingle(),db.from('menu').select().eq('venue_id',v).order('category').order('id')]);
+app.get('/api/info',wrap(async(q,s)=>{const v=+q.query.v||0;const [a,b]=await Promise.all([db.from('venues').select('id,name,logo,welcome,points,address,lat,lng').eq('id',v).maybeSingle(),db.from('menu').select().eq('venue_id',v).order('id')]);
  if(!a.data)return s.status(404).json({error:'Объект не найден'});s.json({venue:a.data,menu:b.data||[]})}));
 
 // --- клиент ---
@@ -63,7 +63,7 @@ app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{if(q.user.role==='wa
 app.post('/api/admin/venue',adm,wrap(async(q,s)=>{const b=q.body;if(!str(b.name))return s.status(400).json({error:'Укажите название'});
  await db.from('venues').update({name:str(b.name,80),logo:https(b.logo),welcome:str(b.welcome,500),address:str(b.address,200),lat:num(b.lat),lng:num(b.lng),points:(Array.isArray(b.points)?b.points:[]).map(p=>str(p,100)).filter(Boolean).slice(0,20)}).eq('id',q.vid);s.json({ok:1})}));
 app.post('/api/admin/menu',adm,wrap(async(q,s)=>{const b=q.body,price=Number(b.price);if(!str(b.name)||!(price>=0))return s.status(400).json({error:'Укажите название и цену'});
- const row={name:str(b.name,80),category:str(b.category,40)||'Основное',price,photo:https(b.photo)};
+ const row={name:str(b.name,80),category:str(b.category,40)||'Основное',price,photo:https(b.photo),description:str(b.description,600)||null};
  const {data,error}=b.id?await db.from('menu').update(row).eq('id',+b.id).eq('venue_id',q.vid).select().single():await db.from('menu').insert({...row,venue_id:q.vid}).select().single();if(error)throw error;s.json(data)}));
 app.delete('/api/admin/menu/:id',adm,wrap(async(q,s)=>{await db.from('menu').delete().eq('id',+q.params.id).eq('venue_id',q.vid);s.json({ok:1})}));
 app.get('/api/admin/staff',adm,wrap(async(q,s)=>{const {data}=await db.from('staff').select().eq('venue_id',q.vid).order('name');s.json(data||[])}));
