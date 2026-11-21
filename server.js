@@ -15,7 +15,7 @@ const auth=(...roles)=>(q,s,n)=>{try{const u=jwt.verify((q.headers.authorization
 const G=(q,s,n)=>{const u=q.user,v=u.role==='owner'?+q.headers['x-venue']:u.venue;if(!v)return s.status(400).json({error:'Выберите объект'});
  if(u.role!=='owner'){q.vid=v;return n()}
  db.from('venues').select('id').eq('id',v).eq('owner_id',u.id).maybeSingle().then(({data})=>{if(!data)return s.status(403).json({error:'Нет доступа'});q.vid=v;n()}).catch(()=>s.status(500).json({error:'Ошибка сервера'}))};
-const adm=[auth('admin','owner'),G],stf=[auth('terminal','admin','owner'),G],own=auth('owner');
+const adm=[auth('admin','owner'),G],stf=[auth('terminal','admin','owner','waiter'),G],own=auth('owner');
 
 // --- вход ---
 app.post('/api/register',authRl,wrap(async(q,s)=>{const b=q.body,name=str(b.name,60),phone=tel(b.phone),p=String(b.password||'');
@@ -40,22 +40,24 @@ app.post('/api/orders',auth('customer'),wrap(async(q,s)=>{const b=q.body,vid=+b.
  if(!items.length||!type)return s.status(400).json({error:'Корзина пуста'});
  if(type==='delivery'&&!str(b.address))return s.status(400).json({error:'Укажите адрес доставки'});
  const pts=v.points||[],point=pts.includes(b.point)?b.point:pts[0]||null;
- const {data,error}=await db.from('orders').insert({user_id:q.user.id,venue_id:vid,items,total,type,point:type==='delivery'?null:point,address:type==='delivery'?str(b.address,200):null,comment:str(b.comment,300)}).select().single();
+ let tbl=null;if(type==='dinein'){const ts=await TS(vid);if(ts.length){tbl=ts.find(t=>t.id==b.table);if(!tbl)return s.status(400).json({error:'Выберите стол'});if(tbl.busy)return s.status(409).json({error:'Этот стол уже занят'})}}
+ const {data,error}=await db.from('orders').insert({user_id:q.user.id,venue_id:vid,items,total,type,table_id:tbl?tbl.id:null,point:type==='delivery'?null:tbl?`Стол №${tbl.num}`:point,address:type==='delivery'?str(b.address,200):null,comment:str(b.comment,300)}).select().single();
  if(error)throw error;s.json(data)}));
 app.get('/api/me',auth('customer'),wrap(async(q,s)=>{const [o,n]=await Promise.all([db.from('orders').select('*,venues(name)').eq('user_id',q.user.id).order('id',{ascending:false}).limit(20),db.from('notifs').select().eq('user_id',q.user.id).order('id',{ascending:false}).limit(30)]);s.json({orders:o.data||[],notifs:n.data||[]})}));
 app.post('/api/notifs/read',auth('customer'),wrap(async(q,s)=>{await db.from('notifs').update({read:true}).eq('user_id',q.user.id);s.json({ok:1})}));
 
 // --- приём заказов (терминал) ---
 app.get('/api/staff/names',stf,wrap(async(q,s)=>{const {data}=await db.from('staff').select('id,name,position').eq('venue_id',q.vid).order('name');s.json(data||[])}));
-app.get('/api/staff/orders',stf,wrap(async(q,s)=>{const {data}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).in('status',['new','accepted']).order('id');s.json(data||[])}));
-app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{const id=+q.params.id,a=q.params.act;const {data:o}=await db.from('orders').select().eq('id',id).eq('venue_id',q.vid).maybeSingle();
+app.get('/api/staff/orders',stf,wrap(async(q,s)=>{const {data}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).or('status.in.(new,accepted),and(status.eq.ready,table_id.not.is.null)').order('id');s.json(data||[])}));
+app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{if(q.user.role==='waiter')return s.status(403).json({error:'Нет доступа'});const id=+q.params.id,a=q.params.act;const {data:o}=await db.from('orders').select().eq('id',id).eq('venue_id',q.vid).maybeSingle();
  if(!o)return s.status(404).json({error:'Заказ не найден'});let patch,msg;
  if(a==='accept'&&o.status==='new'){const {data:st}=await db.from('staff').select('name').eq('id',+q.body.staff||0).eq('venue_id',q.vid).maybeSingle();
   if(!st)return s.status(400).json({error:'Выберите своё имя'});patch={status:'accepted',staff_name:st.name,accepted_at:new Date()};msg=`Ваш заказ №${id} принят, начинаем готовить!`}
  else if(a==='ready'&&o.status==='accepted'){patch={status:'ready',ready_at:new Date()};msg=`Ваш заказ №${id} готов! ${o.type==='delivery'?'Скоро доставим.':'Можно забирать.'}`}
+ else if(a==='close'&&['accepted','ready'].includes(o.status)){patch={status:'closed'}}
  else return s.status(400).json({error:'Действие недоступно'});
  const {data}=await db.from('orders').update(patch).eq('id',id).select('*,users(nick,phone)').single();
- await db.from('notifs').insert({user_id:o.user_id,text:msg});s.json(data)}));
+ if(msg&&o.user_id)await db.from('notifs').insert({user_id:o.user_id,text:msg});s.json(data)}));
 
 // --- администратор объекта ---
 app.post('/api/admin/venue',adm,wrap(async(q,s)=>{const b=q.body;if(!str(b.name))return s.status(400).json({error:'Укажите название'});
@@ -92,7 +94,32 @@ app.get('/api/owner/backup',own,wrap(async(q,s)=>{const out={at:new Date()};for(
 (async()=>{const {OWNER_PHONE:ph,OWNER_PASSWORD:pw}=process.env;if(!ph||!pw)return;const {data}=await db.from('users').select('id').eq('role','owner').limit(1);
  if(!data?.length)await db.from('users').insert({role:'owner',name:'Владелец',phone:tel(ph),login:tel(ph),pass_hash:await bcrypt.hash(pw,10)})})().catch(console.error);
 
+// --- столы, официанты ---
+const TS=async vid=>{const [t,o]=await Promise.all([db.from('tables').select().eq('venue_id',vid).order('num'),db.from('orders').select('id,table_id,status,total,staff_name').eq('venue_id',vid).not('table_id','is',null).in('status',['new','accepted','ready'])]);
+ return (t.data||[]).map(x=>{const r=(o.data||[]).find(y=>y.table_id===x.id);return {id:x.id,num:x.num,busy:!!r,order:r?{id:r.id,status:r.status,total:r.total,waiter:r.staff_name}:null}})};
+app.get('/api/tables',wrap(async(q,s)=>s.json((await TS(+q.query.v||0)).map(t=>({id:t.id,num:t.num,busy:t.busy})))));
+app.get('/api/staff/tables',stf,wrap(async(q,s)=>s.json(await TS(q.vid))));
+app.post('/api/staff/new-order',stf,wrap(async(q,s)=>{const b=q.body,ids=(Array.isArray(b.items)?b.items:[]).slice(0,60);
+ const {data:t}=await db.from('tables').select().eq('id',+b.table||0).eq('venue_id',q.vid).maybeSingle();if(!t)return s.status(400).json({error:'Выберите стол'});
+ const {data:menu}=await db.from('menu').select().eq('venue_id',q.vid).in('id',ids.map(i=>+i.id||0));const items=[];
+ for(const i of ids){const m=(menu||[]).find(x=>x.id==i.id),n=Math.min(parseInt(i.qty)||0,50);if(m&&n>0)items.push({id:m.id,name:m.name,price:m.price,qty:n})}
+ if(!items.length)return s.status(400).json({error:'Выберите блюда'});
+ let who=q.user.role==='waiter'?q.user.name:null;if(!who){const {data:st}=await db.from('staff').select('name').eq('id',+b.staff||0).eq('venue_id',q.vid).maybeSingle();who=st?.name}
+ if(!who)return s.status(400).json({error:'Выберите своё имя'});
+ const {data:open}=await db.from('orders').select().eq('venue_id',q.vid).eq('table_id',t.id).in('status',['new','accepted','ready']).maybeSingle();
+ let all=items;if(open){all=[...open.items];for(const i of items){const x=all.find(y=>y.id===i.id);x?x.qty+=i.qty:all.push(i)}}
+ const row={items:all,total:all.reduce((a,i)=>a+i.price*i.qty,0),status:'accepted',staff_name:open?.staff_name||who,accepted_at:open?.accepted_at||new Date()};
+ const {data,error}=open?await db.from('orders').update(row).eq('id',open.id).select().single():await db.from('orders').insert({...row,venue_id:q.vid,type:'dinein',table_id:t.id,point:`Стол №${t.num}`}).select().single();
+ if(error)throw error;if(open?.user_id&&open.status==='new')await db.from('notifs').insert({user_id:open.user_id,text:`Ваш заказ №${open.id} принят, начинаем готовить!`});s.json(data)}));
+app.post('/api/admin/tables',adm,wrap(async(q,s)=>{const n=Math.min(Math.max(parseInt(q.body.count)||0,0),100);const {data:t}=await db.from('tables').select('num').eq('venue_id',q.vid);const have=new Set((t||[]).map(x=>x.num)),add=[];
+ for(let i=1;i<=n;i++)if(!have.has(i))add.push({venue_id:q.vid,num:i});if(add.length)await db.from('tables').insert(add);await db.from('tables').delete().eq('venue_id',q.vid).gt('num',n);s.json({ok:1})}));
+app.get('/api/admin/waiters',adm,wrap(async(q,s)=>{const {data}=await db.from('users').select('id,name,login').eq('role','waiter').eq('venue_id',q.vid);s.json(data||[])}));
+app.post('/api/admin/waiters',adm,wrap(async(q,s)=>{const b=q.body,login=str(b.login,40).toLowerCase(),p=String(b.password||'');
+ if(!str(b.name)||!/^[a-z0-9_.-]{3,40}$/.test(login)||p.length<8)return s.status(400).json({error:'Имя, логин (латиницей) и пароль от 8 символов'});
+ const {error}=await db.from('users').insert({role:'waiter',name:str(b.name,60),login,venue_id:q.vid,pass_hash:await bcrypt.hash(p,10)});if(error)return s.status(409).json({error:'Такой логин уже занят'});s.json({ok:1})}));
+app.delete('/api/admin/waiters/:id',adm,wrap(async(q,s)=>{await db.from('users').delete().eq('id',str(q.params.id,60)).eq('venue_id',q.vid).eq('role','waiter');s.json({ok:1})}));
+
 app.get(/^\/(app\.js|style\.css|sw\.js|manifest-[a-z]+\.json|icon-[a-z]+-\d+\.png)$/,(q,s)=>s.sendFile(q.params[0],{root:__dirname}));
-const pages={'/':'index.html','/staff':'staff.html','/admin':'admin.html','/owner':'owner.html'};
+const pages={'/':'index.html','/staff':'staff.html','/admin':'admin.html','/owner':'owner.html','/waiter':'waiter.html'};
 for(const [u,f] of Object.entries(pages))app.get(u,(q,s)=>s.sendFile(f,{root:__dirname}));
 app.listen(process.env.PORT||3000,()=>console.log('OK'));

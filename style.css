@@ -34,3 +34,7 @@ a.btn{display:block;text-align:center;text-decoration:none}
 .names{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:10px 0}.names .btn small{display:block;font-weight:400;opacity:.8}
 .modal .card{width:min(440px,100%);max-height:90vh;overflow:auto}
 @media(max-width:600px){body{padding:0 10px 90px}.grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}.hero h1{font-size:1.5rem}.btn,.qty button{min-height:44px}}
+.tables{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin:10px 0}
+.tbl{padding:14px 8px;border-radius:12px;border:1px solid var(--b);font:inherit;color:#0b2a1a;cursor:pointer;display:flex;flex-direction:column;gap:2px;transition:transform .15s}.tbl:active{transform:scale(.96)}
+.tbl.free{background:#8fe3a8}.tbl.busy{background:#f6b6d0;color:#4a0f2a}.tbl.sel{background:var(--a)}.tbl:disabled{opacity:.7;cursor:not-allowed}.tbl small{font-size:12px}
+.sheet{max-height:48vh;overflow:auto;margin:8px 0}.sheet h4{margin:10px 0 2px}
