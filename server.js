@@ -176,6 +176,13 @@ app.get('/api/report.xlsx',adm,wrap(async(q,s)=>{const off=+process.env.TZ_OFFSE
 app.get('/api/admin/tables-qr',adm,wrap(async(q,s)=>{const base=`${q.protocol}://${q.get('host')}`,{data:t}=await db.from('tables').select('num').eq('venue_id',q.vid).order('num');
  s.json(await Promise.all((t||[]).map(async x=>({num:x.num,svg:await QR.toString(`${base}/?v=${q.vid}&t=${x.num}`,{type:'svg',margin:1})}))))}));
 
+// --- загрузка фото блюд ---
+app.post('/api/admin/upload',adm,wrap(async(q,s)=>{const m=/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+\/=]+)$/.exec(q.body.data||'');if(!m)return s.status(400).json({error:'Загрузите картинку JPG, PNG или WebP'});
+ const buf=Buffer.from(m[2],'base64');if(buf.length>1.5e6)return s.status(400).json({error:'Файл слишком большой (до 1,5 МБ)'});
+ const path=`${q.vid}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${m[1]==='jpeg'?'jpg':m[1]}`;
+ const {error}=await db.storage.from('menu').upload(path,buf,{contentType:'image/'+m[1],cacheControl:'31536000'});if(error)throw error;
+ s.json({url:db.storage.from('menu').getPublicUrl(path).data.publicUrl})}));
+
 app.get(/^\/(app\.js|style\.css|qr\.png|plan\.jpg|sw\.js|manifest-[a-z]+\.json|icon-[a-z]+-\d+\.png)$/,(q,s)=>s.sendFile(q.params[0],{root:__dirname}));
 const pages={'/':'index.html','/staff':'staff.html','/admin':'admin.html','/owner':'owner.html','/waiter':'waiter.html'};
 for(const [u,f] of Object.entries(pages))app.get(u,(q,s)=>s.sendFile(f,{root:__dirname}));
