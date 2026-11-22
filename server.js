@@ -3,7 +3,7 @@ const {SUPABASE_URL,SUPABASE_SERVICE_KEY,JWT_SECRET}=process.env;
 if(!SUPABASE_URL||!SUPABASE_SERVICE_KEY||!JWT_SECRET||JWT_SECRET.length<24)throw Error('Нужны SUPABASE_URL, SUPABASE_SERVICE_KEY и JWT_SECRET (от 24 символов)');
 const db=createClient(SUPABASE_URL,SUPABASE_SERVICE_KEY,{auth:{persistSession:false}});
 const app=express();app.set('trust proxy',1);
-app.use(helmet({contentSecurityPolicy:{directives:{...helmet.contentSecurityPolicy.getDefaultDirectives(),'img-src':["'self'",'data:','https:'],'frame-src':['https://www.openstreetmap.org']}}}));
+app.use(helmet({contentSecurityPolicy:{directives:{...helmet.contentSecurityPolicy.getDefaultDirectives(),'img-src':["'self'",'data:','https:'],'frame-src':['https://www.google.com','https://maps.google.com']}}}));
 app.use(express.json({limit:'1mb'}));
 app.use('/api/',rl({windowMs:60000,limit:200}));
 const authRl=rl({windowMs:900000,limit:30});
@@ -44,7 +44,7 @@ app.post('/api/orders',auth('customer'),wrap(async(q,s)=>{const b=q.body,vid=+b.
  let tbl=null;if(type==='dinein'){const ts=await TS(vid);if(ts.length){tbl=ts.find(t=>t.id==b.table);if(!tbl)return s.status(400).json({error:'Выберите стол'});if(tbl.busy)return s.status(409).json({error:'Этот стол уже занят'})}}
  const {data,error}=await db.from('orders').insert({user_id:q.user.id,venue_id:vid,items,total,type,pay_method:b.pay==='online'?'online':'cash',cash_given:b.pay==='online'?null:(g=>g!=null&&g>=total?g:null)(num(b.given)),table_id:tbl?tbl.id:null,point:type==='delivery'?null:tbl?`Стол №${tbl.num}`:point,address:type==='delivery'?str(b.address,200):null,comment:str(b.comment,300)}).select().single();
  if(error)throw error;if(b.pay==='online')await db.from('receipts').insert({order_id:data.id,data:b.receipt});s.json(data)}));
-app.get('/api/me',auth('customer'),wrap(async(q,s)=>{const [o,n]=await Promise.all([db.from('orders').select('*,venues(name)').eq('user_id',q.user.id).order('id',{ascending:false}).limit(20),db.from('notifs').select().eq('user_id',q.user.id).order('id',{ascending:false}).limit(30)]);s.json({orders:o.data||[],notifs:n.data||[]})}));
+app.get('/api/me',auth('customer'),wrap(async(q,s)=>{const [o,n,u]=await Promise.all([db.from('orders').select('*,venues(name)').eq('user_id',q.user.id).eq('hide_client',false).order('id',{ascending:false}).limit(20),db.from('notifs').select().eq('user_id',q.user.id).order('id',{ascending:false}).limit(50),db.from('users').select('name,nick,phone').eq('id',q.user.id).maybeSingle()]);s.json({orders:o.data||[],notifs:n.data||[],u:u.data||{}})}));
 app.post('/api/notifs/read',auth('customer'),wrap(async(q,s)=>{await db.from('notifs').update({read:true}).eq('user_id',q.user.id);s.json({ok:1})}));
 
 // --- приём заказов (терминал) ---
@@ -58,7 +58,7 @@ app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{if(q.user.role==='wa
  if(a==='accept'&&o.status==='new'){const {data:st}=await db.from('staff').select('name').eq('id',+q.body.staff||0).eq('venue_id',q.vid).maybeSingle();
   if(!st)return s.status(400).json({error:'Выберите своё имя'});patch={status:'accepted',staff_name:st.name,accepted_at:new Date(),...(o.pay_method==='online'?{paid:true,paid_at:new Date()}:{})};msg=`Ваш заказ №${id} принят, начинаем готовить!`}
  else if(a==='ready'&&o.status==='accepted'){patch={status:'ready',ready_at:new Date()};msg=`Ваш заказ №${id} готов! ${o.type==='delivery'?'Скоро доставим.':'Можно забирать.'}`}
- else if(a==='reject'&&['new','accepted'].includes(o.status)){patch={status:'rejected'};const why=str(q.body.reason,200);msg=`Заказ №${id} отклонён.${why?' Причина: '+why+'.':''} Если вы уже оплатили — свяжитесь с заведением.`}
+ else if(a==='reject'&&['new','accepted'].includes(o.status)){patch={status:'rejected'};const why=str(q.body.reason,200);msg=`Заказ №${id} отклонён.${why?' Причина: '+why.replace(/[.!?\s]+$/,'')+'.':''} Если вы уже оплатили — свяжитесь с заведением.`}
  else if(a==='pay'&&!o.paid&&o.status!=='closed'){const m=q.body.method==='online'?'online':'cash',g=num(q.body.given);if(m==='cash'&&(g==null||g<o.total))return s.status(400).json({error:'Получено меньше суммы заказа'});patch={paid:true,paid_at:new Date(),pay_method:m,cash_given:m==='cash'?g:null}}
  else if(a==='close'&&!o.paid)return s.status(400).json({error:'Сначала примите оплату'});
  else if(a==='close'&&['accepted','ready'].includes(o.status)){patch={status:'closed'}}
@@ -135,6 +135,15 @@ const upd=async(q,s,roles)=>{const b=q.body,patch={};if(str(b.name))patch.name=s
 app.patch('/api/owner/accounts/:id',own,G,wrap((q,s)=>upd(q,s,['admin','terminal'])));
 app.patch('/api/admin/waiters/:id',adm,wrap((q,s)=>upd(q,s,['waiter'])));
 app.patch('/api/admin/staff/:id',adm,wrap(async(q,s)=>{if(!str(q.body.name))return s.status(400).json({error:'Укажите имя'});await db.from('staff').update({name:str(q.body.name,60),position:str(q.body.position,40)}).eq('id',+q.params.id).eq('venue_id',q.vid);s.json({ok:1})}));
+
+// --- профиль и настройки ---
+app.post('/api/account/password',authRl,auth('owner','admin','terminal','waiter','customer'),wrap(async(q,s)=>{const {data:u}=await db.from('users').select().eq('id',q.user.id).maybeSingle(),min=u&&u.role==='customer'?6:8;
+ if(!u||!(await bcrypt.compare(String(q.body.old||''),u.pass_hash)))return s.status(403).json({error:'Текущий пароль неверный'});
+ const n=String(q.body.new||'');if(n.length<min)return s.status(400).json({error:`Новый пароль: от ${min} символов`});
+ await db.from('users').update({pass_hash:await bcrypt.hash(n,10)}).eq('id',u.id);s.json({ok:1})}));
+app.post('/api/account/profile',auth('customer'),wrap(async(q,s)=>{const b=q.body,name=str(b.name,60),phone=tel(b.phone);if(!name||phone.length<7)return s.status(400).json({error:'Проверьте имя и телефон'});
+ const {error}=await db.from('users').update({name,nick:str(b.nick,40)||name,phone,login:phone}).eq('id',q.user.id);if(error)return s.status(409).json({error:'Этот номер уже используется'});s.json({ok:1})}));
+app.post('/api/me/clear',auth('customer'),wrap(async(q,s)=>{if(q.body.what==='orders')await db.from('orders').update({hide_client:true}).eq('user_id',q.user.id).in('status',['ready','closed','rejected']);else await db.from('notifs').delete().eq('user_id',q.user.id);s.json({ok:1})}));
 
 app.get(/^\/(app\.js|style\.css|qr\.png|sw\.js|manifest-[a-z]+\.json|icon-[a-z]+-\d+\.png)$/,(q,s)=>s.sendFile(q.params[0],{root:__dirname}));
 const pages={'/':'index.html','/staff':'staff.html','/admin':'admin.html','/owner':'owner.html','/waiter':'waiter.html'};
