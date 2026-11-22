@@ -4,7 +4,7 @@ if(!SUPABASE_URL||!SUPABASE_SERVICE_KEY||!JWT_SECRET||JWT_SECRET.length<24)throw
 const db=createClient(SUPABASE_URL,SUPABASE_SERVICE_KEY,{auth:{persistSession:false}});
 const app=express();app.set('trust proxy',1);
 app.use(helmet({contentSecurityPolicy:{directives:{...helmet.contentSecurityPolicy.getDefaultDirectives(),'img-src':["'self'",'data:','https:'],'frame-src':['https://www.openstreetmap.org']}}}));
-app.use(express.json({limit:'50kb'}));
+app.use(express.json({limit:'1mb'}));
 app.use('/api/',rl({windowMs:60000,limit:200}));
 const authRl=rl({windowMs:900000,limit:30});
 const wrap=f=>(q,s)=>f(q,s).catch(e=>{console.error(e);s.status(500).json({error:'Ошибка сервера'})});
@@ -28,32 +28,37 @@ app.post('/api/login',authRl,wrap(async(q,s)=>{const l=str(q.body.login,40).toLo
 
 // --- публичное ---
 app.get('/api/venues',wrap(async(q,s)=>{const {data}=await db.from('venues').select('id,name,logo,welcome').order('id');s.json(data||[])}));
-app.get('/api/info',wrap(async(q,s)=>{const v=+q.query.v||0;const [a,b]=await Promise.all([db.from('venues').select('id,name,logo,welcome,points,address,lat,lng').eq('id',v).maybeSingle(),db.from('menu').select().eq('venue_id',v).order('id')]);
+app.get('/api/info',wrap(async(q,s)=>{const v=+q.query.v||0;const [a,b]=await Promise.all([db.from('venues').select('id,name,logo,welcome,points,address,lat,lng,qr').eq('id',v).maybeSingle(),db.from('menu').select().eq('venue_id',v).order('id')]);
  if(!a.data)return s.status(404).json({error:'Объект не найден'});s.json({venue:a.data,menu:b.data||[]})}));
 
 // --- клиент ---
 app.post('/api/orders',auth('customer'),wrap(async(q,s)=>{const b=q.body,vid=+b.venue,ids=(Array.isArray(b.items)?b.items:[]).slice(0,50);
- const {data:v}=await db.from('venues').select('points').eq('id',vid).maybeSingle();if(!v)return s.status(400).json({error:'Выберите заведение'});
+ const {data:v}=await db.from('venues').select('points,qr').eq('id',vid).maybeSingle();if(!v)return s.status(400).json({error:'Выберите заведение'});
  const {data:menu}=await db.from('menu').select().eq('venue_id',vid).in('id',ids.map(i=>+i.id||0));let total=0;const items=[];
  for(const i of ids){const m=(menu||[]).find(x=>x.id==i.id),n=Math.min(parseInt(i.qty)||0,50);if(m&&n>0){items.push({id:m.id,name:m.name,price:m.price,qty:n});total+=m.price*n}}
  const type=['takeaway','dinein','delivery'].includes(b.type)?b.type:null;
  if(!items.length||!type)return s.status(400).json({error:'Корзина пуста'});
+ if(b.pay==='online'&&(!v.qr||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(b.receipt||'')||b.receipt.length>900000))return s.status(400).json({error:'Для онлайн-оплаты оплатите по QR и загрузите чек (скриншот)'});
  if(type==='delivery'&&!str(b.address))return s.status(400).json({error:'Укажите адрес доставки'});
  const pts=v.points||[],point=pts.includes(b.point)?b.point:pts[0]||null;
  let tbl=null;if(type==='dinein'){const ts=await TS(vid);if(ts.length){tbl=ts.find(t=>t.id==b.table);if(!tbl)return s.status(400).json({error:'Выберите стол'});if(tbl.busy)return s.status(409).json({error:'Этот стол уже занят'})}}
- const {data,error}=await db.from('orders').insert({user_id:q.user.id,venue_id:vid,items,total,type,pay_method:b.pay==='online'?'online':'cash',cash_given:(g=>g!=null&&g>=total?g:null)(num(b.given)),table_id:tbl?tbl.id:null,point:type==='delivery'?null:tbl?`Стол №${tbl.num}`:point,address:type==='delivery'?str(b.address,200):null,comment:str(b.comment,300)}).select().single();
- if(error)throw error;s.json(data)}));
+ const {data,error}=await db.from('orders').insert({user_id:q.user.id,venue_id:vid,items,total,type,pay_method:b.pay==='online'?'online':'cash',cash_given:b.pay==='online'?null:(g=>g!=null&&g>=total?g:null)(num(b.given)),table_id:tbl?tbl.id:null,point:type==='delivery'?null:tbl?`Стол №${tbl.num}`:point,address:type==='delivery'?str(b.address,200):null,comment:str(b.comment,300)}).select().single();
+ if(error)throw error;if(b.pay==='online')await db.from('receipts').insert({order_id:data.id,data:b.receipt});s.json(data)}));
 app.get('/api/me',auth('customer'),wrap(async(q,s)=>{const [o,n]=await Promise.all([db.from('orders').select('*,venues(name)').eq('user_id',q.user.id).order('id',{ascending:false}).limit(20),db.from('notifs').select().eq('user_id',q.user.id).order('id',{ascending:false}).limit(30)]);s.json({orders:o.data||[],notifs:n.data||[]})}));
 app.post('/api/notifs/read',auth('customer'),wrap(async(q,s)=>{await db.from('notifs').update({read:true}).eq('user_id',q.user.id);s.json({ok:1})}));
 
 // --- приём заказов (терминал) ---
 app.get('/api/staff/names',stf,wrap(async(q,s)=>{const {data}=await db.from('staff').select('id,name,position').eq('venue_id',q.vid).order('name');s.json(data||[])}));
-app.get('/api/staff/orders',stf,wrap(async(q,s)=>{const {data}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).or('status.in.(new,accepted),and(status.eq.ready,table_id.not.is.null)').order('id');s.json(data||[])}));
+app.get('/api/staff/orders',stf,wrap(async(q,s)=>{const {data}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).or('status.in.(new,accepted),and(status.eq.ready,table_id.not.is.null)').order('id');const ids=(data||[]).map(x=>x.id),{data:rc}=ids.length?await db.from('receipts').select('order_id').in('order_id',ids):{data:[]};s.json((data||[]).map(x=>({...x,has_receipt:(rc||[]).some(r=>r.order_id===x.id)})))}));
+app.get('/api/staff/orders/:id/receipt',stf,wrap(async(q,s)=>{if(q.user.role==='waiter')return s.status(403).json({error:'Нет доступа'});const id=+q.params.id;
+ const {data:o}=await db.from('orders').select('id').eq('id',id).eq('venue_id',q.vid).maybeSingle();if(!o)return s.status(404).json({error:'Не найдено'});
+ const {data}=await db.from('receipts').select('data').eq('order_id',id).maybeSingle();s.json({data:data?.data||null})}));
 app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{if(q.user.role==='waiter')return s.status(403).json({error:'Нет доступа'});const id=+q.params.id,a=q.params.act;const {data:o}=await db.from('orders').select().eq('id',id).eq('venue_id',q.vid).maybeSingle();
  if(!o)return s.status(404).json({error:'Заказ не найден'});let patch,msg;
  if(a==='accept'&&o.status==='new'){const {data:st}=await db.from('staff').select('name').eq('id',+q.body.staff||0).eq('venue_id',q.vid).maybeSingle();
-  if(!st)return s.status(400).json({error:'Выберите своё имя'});patch={status:'accepted',staff_name:st.name,accepted_at:new Date()};msg=`Ваш заказ №${id} принят, начинаем готовить!`}
+  if(!st)return s.status(400).json({error:'Выберите своё имя'});patch={status:'accepted',staff_name:st.name,accepted_at:new Date(),...(o.pay_method==='online'?{paid:true,paid_at:new Date()}:{})};msg=`Ваш заказ №${id} принят, начинаем готовить!`}
  else if(a==='ready'&&o.status==='accepted'){patch={status:'ready',ready_at:new Date()};msg=`Ваш заказ №${id} готов! ${o.type==='delivery'?'Скоро доставим.':'Можно забирать.'}`}
+ else if(a==='reject'&&['new','accepted'].includes(o.status)){patch={status:'rejected'};const why=str(q.body.reason,200);msg=`Заказ №${id} отклонён.${why?' Причина: '+why+'.':''} Если вы уже оплатили — свяжитесь с заведением.`}
  else if(a==='pay'&&!o.paid&&o.status!=='closed'){const m=q.body.method==='online'?'online':'cash',g=num(q.body.given);if(m==='cash'&&(g==null||g<o.total))return s.status(400).json({error:'Получено меньше суммы заказа'});patch={paid:true,paid_at:new Date(),pay_method:m,cash_given:m==='cash'?g:null}}
  else if(a==='close'&&!o.paid)return s.status(400).json({error:'Сначала примите оплату'});
  else if(a==='close'&&['accepted','ready'].includes(o.status)){patch={status:'closed'}}
@@ -63,7 +68,7 @@ app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{if(q.user.role==='wa
 
 // --- администратор объекта ---
 app.post('/api/admin/venue',adm,wrap(async(q,s)=>{const b=q.body;if(!str(b.name))return s.status(400).json({error:'Укажите название'});
- await db.from('venues').update({name:str(b.name,80),logo:https(b.logo),welcome:str(b.welcome,500),address:str(b.address,200),lat:num(b.lat),lng:num(b.lng),points:(Array.isArray(b.points)?b.points:[]).map(p=>str(p,100)).filter(Boolean).slice(0,20)}).eq('id',q.vid);s.json({ok:1})}));
+ await db.from('venues').update({name:str(b.name,80),logo:https(b.logo),welcome:str(b.welcome,500),address:str(b.address,200),qr:/^(https:\/\/|\/qr\.png$)/.test(b.qr||'')?str(b.qr,500):null,lat:num(b.lat),lng:num(b.lng),points:(Array.isArray(b.points)?b.points:[]).map(p=>str(p,100)).filter(Boolean).slice(0,20)}).eq('id',q.vid);s.json({ok:1})}));
 app.post('/api/admin/menu',adm,wrap(async(q,s)=>{const b=q.body,price=Number(b.price);if(!str(b.name)||!(price>=0))return s.status(400).json({error:'Укажите название и цену'});
  const row={name:str(b.name,80),category:str(b.category,40)||'Основное',price,photo:https(b.photo),description:str(b.description,600)||null};
  const {data,error}=b.id?await db.from('menu').update(row).eq('id',+b.id).eq('venue_id',q.vid).select().single():await db.from('menu').insert({...row,venue_id:q.vid}).select().single();if(error)throw error;s.json(data)}));
@@ -74,7 +79,7 @@ app.delete('/api/admin/staff/:id',adm,wrap(async(q,s)=>{await db.from('staff').d
 
 // --- владелец: объекты и доступы ---
 app.get('/api/owner/venues',own,wrap(async(q,s)=>{const {data:v}=await db.from('venues').select('id,name,logo').eq('owner_id',q.user.id).order('id');const ids=(v||[]).map(x=>x.id);
- const {data:u}=ids.length?await db.from('users').select('id,role,login,venue_id').in('role',['admin','terminal']).in('venue_id',ids):{data:[]};
+ const {data:u}=ids.length?await db.from('users').select('id,role,name,login,venue_id').in('role',['admin','terminal']).in('venue_id',ids):{data:[]};
  s.json((v||[]).map(x=>({...x,accounts:(u||[]).filter(a=>a.venue_id===x.id)})))}));
 app.post('/api/owner/venues',own,wrap(async(q,s)=>{if(!str(q.body.name))return s.status(400).json({error:'Укажите название'});
  const {data}=await db.from('venues').insert({owner_id:q.user.id,name:str(q.body.name,80)}).select().single();s.json(data)}));
@@ -83,13 +88,13 @@ app.post('/api/owner/accounts',own,G,wrap(async(q,s)=>{const b=q.body,login=str(
  const {error}=await db.from('users').insert({role:b.role,name:b.role==='admin'?'Администратор':'Терминал',login,venue_id:q.vid,pass_hash:await bcrypt.hash(p,10)});
  if(error)return s.status(409).json({error:'Такой логин уже занят'});s.json({ok:1})}));
 app.delete('/api/owner/accounts/:id',own,G,wrap(async(q,s)=>{await db.from('users').delete().eq('id',str(q.params.id,60)).eq('venue_id',q.vid).in('role',['admin','terminal']);s.json({ok:1})}));
-app.get('/api/owner/stats',own,G,wrap(async(q,s)=>{const {data:o}=await db.from('orders').select('id,total,items,status,created_at,accepted_at,ready_at,paid,pay_method,users(nick)').eq('venue_id',q.vid).order('id',{ascending:false});
+app.get('/api/owner/stats',own,G,wrap(async(q,s)=>{const {data:o}=await db.from('orders').select('id,total,items,status,created_at,accepted_at,ready_at,paid,pay_method,users(nick)').neq('status','rejected').eq('venue_id',q.vid).order('id',{ascending:false});
  const off=+process.env.TZ_OFFSET||6,L=d=>new Date(+new Date(d)+off*36e5),hours=Array(24).fill(0),wd=Array(7).fill(0),days={},dish={},ta=[],tr=[];let sum=0;const pay={cash:0,online:0};
  for(const r of o||[]){sum+=r.total;if(r.paid)pay[r.pay_method||'cash']+=r.total;const l=L(r.created_at);hours[l.getUTCHours()]++;wd[l.getUTCDay()]++;const k=l.toISOString().slice(0,10);days[k]=(days[k]||0)+r.total;
   r.items.forEach(i=>dish[i.name]=(dish[i.name]||0)+i.qty);if(r.accepted_at)ta.push((new Date(r.accepted_at)-new Date(r.created_at))/6e4);if(r.ready_at)tr.push((new Date(r.ready_at)-new Date(r.accepted_at))/6e4)}
  const avg=a=>a.length?Math.round(a.reduce((x,y)=>x+y,0)/a.length*10)/10:0,n=(o||[]).length;
  s.json({count:n,sum,pay,avg:n?Math.round(sum/n):0,accept:avg(ta),cook:avg(tr),hours,wd,days:Object.keys(days).sort().slice(-14).map(k=>[k.slice(5),days[k]]),top:Object.entries(dish).sort((a,b)=>b[1]-a[1]).slice(0,6),recent:(o||[]).slice(0,15)})}));
-app.get('/api/owner/backup',own,wrap(async(q,s)=>{const out={at:new Date()};for(const t of ['users','venues','staff','menu','orders','notifs'])out[t]=(await db.from(t).select()).data;
+app.get('/api/owner/backup',own,wrap(async(q,s)=>{const out={at:new Date()};for(const t of ['users','venues','staff','menu','orders','receipts','notifs'])out[t]=(await db.from(t).select()).data;
  s.setHeader('Content-Disposition','attachment; filename=backup.json');s.json(out)}));
 
 // первый запуск: создаём владельца из переменных окружения (админов и терминалы владелец создаёт сам)
@@ -121,7 +126,17 @@ app.post('/api/admin/waiters',adm,wrap(async(q,s)=>{const b=q.body,login=str(b.l
  const {error}=await db.from('users').insert({role:'waiter',name:str(b.name,60),login,venue_id:q.vid,pass_hash:await bcrypt.hash(p,10)});if(error)return s.status(409).json({error:'Такой логин уже занят'});s.json({ok:1})}));
 app.delete('/api/admin/waiters/:id',adm,wrap(async(q,s)=>{await db.from('users').delete().eq('id',str(q.params.id,60)).eq('venue_id',q.vid).eq('role','waiter');s.json({ok:1})}));
 
-app.get(/^\/(app\.js|style\.css|sw\.js|manifest-[a-z]+\.json|icon-[a-z]+-\d+\.png)$/,(q,s)=>s.sendFile(q.params[0],{root:__dirname}));
+// --- изменить имя / логин / пароль ---
+const upd=async(q,s,roles)=>{const b=q.body,patch={};if(str(b.name))patch.name=str(b.name,60);
+ if(str(b.login)){const l=str(b.login,40).toLowerCase();if(!/^[a-z0-9_.-]{3,40}$/.test(l))return s.status(400).json({error:'Логин: 3–40 латинских букв или цифр'});patch.login=l}
+ if(b.password){if(String(b.password).length<8)return s.status(400).json({error:'Пароль: от 8 символов'});patch.pass_hash=await bcrypt.hash(String(b.password),10)}
+ if(!Object.keys(patch).length)return s.status(400).json({error:'Нечего менять'});
+ const {error}=await db.from('users').update(patch).eq('id',str(q.params.id,60)).eq('venue_id',q.vid).in('role',roles);if(error)return s.status(409).json({error:'Такой логин уже занят'});s.json({ok:1})};
+app.patch('/api/owner/accounts/:id',own,G,wrap((q,s)=>upd(q,s,['admin','terminal'])));
+app.patch('/api/admin/waiters/:id',adm,wrap((q,s)=>upd(q,s,['waiter'])));
+app.patch('/api/admin/staff/:id',adm,wrap(async(q,s)=>{if(!str(q.body.name))return s.status(400).json({error:'Укажите имя'});await db.from('staff').update({name:str(q.body.name,60),position:str(q.body.position,40)}).eq('id',+q.params.id).eq('venue_id',q.vid);s.json({ok:1})}));
+
+app.get(/^\/(app\.js|style\.css|qr\.png|sw\.js|manifest-[a-z]+\.json|icon-[a-z]+-\d+\.png)$/,(q,s)=>s.sendFile(q.params[0],{root:__dirname}));
 const pages={'/':'index.html','/staff':'staff.html','/admin':'admin.html','/owner':'owner.html','/waiter':'waiter.html'};
 for(const [u,f] of Object.entries(pages))app.get(u,(q,s)=>s.sendFile(f,{root:__dirname}));
 app.listen(process.env.PORT||3000,()=>console.log('OK'));
