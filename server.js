@@ -4,6 +4,7 @@ if(!SUPABASE_URL||!SUPABASE_SERVICE_KEY||!JWT_SECRET||JWT_SECRET.length<24)throw
 const db=createClient(SUPABASE_URL,SUPABASE_SERVICE_KEY,{auth:{persistSession:false}});
 const app=express();app.set('trust proxy',1);
 app.use(helmet({contentSecurityPolicy:{directives:{...helmet.contentSecurityPolicy.getDefaultDirectives(),'img-src':["'self'",'data:','https:'],'frame-src':['https://www.google.com','https://maps.google.com']}}}));
+app.use('/api/admin/upload',express.json({limit:'8mb'}));
 app.use(express.json({limit:'1mb'}));
 app.use('/api/',rl({windowMs:60000,limit:200}));
 const authRl=rl({windowMs:900000,limit:30});
@@ -177,8 +178,8 @@ app.get('/api/admin/tables-qr',adm,wrap(async(q,s)=>{const base=`${q.protocol}:/
  s.json(await Promise.all((t||[]).map(async x=>({num:x.num,svg:await QR.toString(`${base}/?v=${q.vid}&t=${x.num}`,{type:'svg',margin:1})}))))}));
 
 // --- загрузка фото блюд ---
-app.post('/api/admin/upload',adm,wrap(async(q,s)=>{const m=/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+\/=]+)$/.exec(q.body.data||'');if(!m)return s.status(400).json({error:'Загрузите картинку JPG, PNG или WebP'});
- const buf=Buffer.from(m[2],'base64');if(buf.length>1.5e6)return s.status(400).json({error:'Файл слишком большой (до 1,5 МБ)'});
+app.post('/api/admin/upload',adm,wrap(async(q,s)=>{const m=/^data:image\/(jpeg|png|webp|gif);base64,([A-Za-z0-9+\/=]+)$/.exec(q.body.data||'');if(!m)return s.status(400).json({error:'Загрузите картинку JPG, PNG, WebP или GIF'});
+ const buf=Buffer.from(m[2],'base64');if(buf.length>(m[1]==='gif'?4e6:1.5e6))return s.status(400).json({error:m[1]==='gif'?'GIF слишком большой (до 4 МБ)':'Файл слишком большой (до 1,5 МБ)'});
  const path=`${q.vid}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${m[1]==='jpeg'?'jpg':m[1]}`;
  const {error}=await db.storage.from('menu').upload(path,buf,{contentType:'image/'+m[1],cacheControl:'31536000'});if(error)throw error;
  s.json({url:db.storage.from('menu').getPublicUrl(path).data.publicUrl})}));
