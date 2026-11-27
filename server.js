@@ -29,7 +29,7 @@ app.post('/api/login',authRl,wrap(async(q,s)=>{const l=str(q.body.login,40).toLo
 
 // --- публичное ---
 app.get('/api/venues',wrap(async(q,s)=>{const {data}=await db.from('venues').select('id,name,logo,welcome').order('id');s.json(data||[])}));
-app.get('/api/info',wrap(async(q,s)=>{const v=+q.query.v||0;const [a,b]=await Promise.all([db.from('venues').select('id,name,logo,welcome,points,address,lat,lng,qr').eq('id',v).maybeSingle(),db.from('menu').select().eq('venue_id',v).order('id')]);
+app.get('/api/info',wrap(async(q,s)=>{const v=+q.query.v||0;const [a,b]=await Promise.all([db.from('venues').select('id,name,logo,welcome,points,address,lat,lng,qr,cancel_min').eq('id',v).maybeSingle(),db.from('menu').select().eq('venue_id',v).order('id')]);
  if(!a.data)return s.status(404).json({error:'Объект не найден'});s.json({venue:a.data,menu:b.data||[]})}));
 
 // --- клиент ---
@@ -42,7 +42,7 @@ app.post('/api/orders',auth('customer'),wrap(async(q,s)=>{const b=q.body,vid=+b.
  if(b.pay==='online'&&(!v.qr||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(b.receipt||'')||b.receipt.length>900000))return s.status(400).json({error:'Для онлайн-оплаты оплатите по QR и загрузите чек (скриншот)'});
  if(type==='delivery'&&!str(b.address))return s.status(400).json({error:'Укажите адрес доставки'});
  const pts=v.points||[],point=pts.includes(b.point)?b.point:pts[0]||null;
- let tbl=null;if(type==='dinein'){const ts=await TS(vid);if(ts.length){tbl=ts.find(t=>t.id==b.table);if(!tbl)return s.status(400).json({error:'Выберите стол'});if(tbl.busy)return s.status(409).json({error:'Этот стол занят. Если это ваш заказ — напишите в чате или позовите официанта'})}}
+ let tbl=null;if(type==='dinein'){const ts=await TS(vid);if(ts.length){tbl=ts.find(t=>t.id==b.table);if(!tbl)return s.status(400).json({error:'Выберите стол'});if(tbl.busy){const {data:mine}=await db.from('orders').select('id').eq('table_id',tbl.id).eq('user_id',q.user.id).in('status',['new','accepted','ready']).limit(1);if(!mine?.length)return s.status(409).json({error:'Этот стол уже занят другим гостем'})}}}
  const {data,error}=await db.from('orders').insert({user_id:q.user.id,venue_id:vid,items,total,type,pay_method:b.pay==='online'?'online':'cash',cash_given:b.pay==='online'?null:(g=>g!=null&&g>=total?g:null)(num(b.given)),table_id:tbl?tbl.id:null,point:type==='delivery'?null:tbl?`Стол №${tbl.num}`:point,address:type==='delivery'?str(b.address,200):null,comment:str(b.comment,300)}).select().single();
  if(error)throw error;if(b.pay==='online')await db.from('receipts').insert({order_id:data.id,data:b.receipt});s.json(data)}));
 app.get('/api/me',auth('customer'),wrap(async(q,s)=>{const [o,n,u]=await Promise.all([db.from('orders').select('*,venues(name)').eq('user_id',q.user.id).eq('hide_client',false).order('id',{ascending:false}).limit(20),db.from('notifs').select().eq('user_id',q.user.id).order('id',{ascending:false}).limit(50),db.from('users').select('name,nick,phone').eq('id',q.user.id).maybeSingle()]);s.json({orders:o.data||[],notifs:n.data||[],u:u.data||{}})}));
@@ -50,7 +50,7 @@ app.post('/api/notifs/read',auth('customer'),wrap(async(q,s)=>{await db.from('no
 
 // --- приём заказов (терминал) ---
 app.get('/api/staff/names',stf,wrap(async(q,s)=>{const {data}=await db.from('staff').select('id,name,position').eq('venue_id',q.vid).order('name');s.json(data||[])}));
-app.get('/api/staff/orders',stf,wrap(async(q,s)=>{const {data}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).in('status',['new','accepted','ready','sent']).order('id');const ids=(data||[]).map(x=>x.id),{data:rc}=ids.length?await db.from('receipts').select('order_id').in('order_id',ids):{data:[]},{data:ms}=ids.length?await db.from('messages').select('order_id').eq('from_client',true).eq('read',false).in('order_id',ids):{data:[]};s.json((data||[]).map(x=>({...x,has_receipt:(rc||[]).some(r=>r.order_id===x.id),chat_new:(ms||[]).filter(m=>m.order_id===x.id).length})))}));
+app.get('/api/staff/orders',stf,wrap(async(q,s)=>{const {data:d1}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).in('status',['new','accepted','ready','sent']).order('id'),{data:d2}=await db.from('orders').select('*,users(nick,phone)').eq('venue_id',q.vid).eq('status','cancelled').gte('created_at',new Date(Date.now()-36e5).toISOString()),data=[...(d1||[]),...(d2||[])];const ids=(data||[]).map(x=>x.id),{data:rc}=ids.length?await db.from('receipts').select('order_id').in('order_id',ids):{data:[]},{data:ms}=ids.length?await db.from('messages').select('order_id').eq('from_client',true).eq('read',false).in('order_id',ids):{data:[]};s.json((data||[]).map(x=>({...x,has_receipt:(rc||[]).some(r=>r.order_id===x.id),chat_new:(ms||[]).filter(m=>m.order_id===x.id).length})))}));
 app.get('/api/staff/orders/:id/receipt',stf,wrap(async(q,s)=>{if(q.user.role==='waiter')return s.status(403).json({error:'Нет доступа'});const id=+q.params.id;
  const {data:o}=await db.from('orders').select('id').eq('id',id).eq('venue_id',q.vid).maybeSingle();if(!o)return s.status(404).json({error:'Не найдено'});
  const {data}=await db.from('receipts').select('data').eq('order_id',id).maybeSingle();s.json({data:data?.data||null})}));
@@ -70,7 +70,7 @@ app.post('/api/staff/orders/:id/:act',stf,wrap(async(q,s)=>{const id=+q.params.i
 
 // --- администратор объекта ---
 app.post('/api/admin/venue',adm,wrap(async(q,s)=>{const b=q.body;if(!str(b.name))return s.status(400).json({error:'Укажите название'});
- await db.from('venues').update({name:str(b.name,80),logo:https(b.logo),welcome:str(b.welcome,500),address:str(b.address,200),qr:/^(https:\/\/|\/qr\.png$)/.test(b.qr||'')?str(b.qr,500):null,lat:num(b.lat),lng:num(b.lng),points:(Array.isArray(b.points)?b.points:[]).map(p=>str(p,100)).filter(Boolean).slice(0,20)}).eq('id',q.vid);s.json({ok:1})}));
+ await db.from('venues').update({name:str(b.name,80),logo:https(b.logo),welcome:str(b.welcome,500),address:str(b.address,200),cancel_min:b.cancel_min===''||b.cancel_min==null?3:Math.min(Math.max(parseInt(b.cancel_min)||0,0),10),qr:/^(https:\/\/|\/qr\.png$)/.test(b.qr||'')?str(b.qr,500):null,lat:num(b.lat),lng:num(b.lng),points:(Array.isArray(b.points)?b.points:[]).map(p=>str(p,100)).filter(Boolean).slice(0,20)}).eq('id',q.vid);s.json({ok:1})}));
 app.post('/api/admin/menu',adm,wrap(async(q,s)=>{const b=q.body,price=Number(b.price);if(!str(b.name)||!(price>=0))return s.status(400).json({error:'Укажите название и цену'});
  const row={name:str(b.name,80),category:str(b.category,40)||'Основное',price,photo:https(b.photo),description:str(b.description,600)||null};
  const {data,error}=b.id?await db.from('menu').update(row).eq('id',+b.id).eq('venue_id',q.vid).select().single():await db.from('menu').insert({...row,venue_id:q.vid}).select().single();if(error)throw error;s.json(data)}));
@@ -90,7 +90,7 @@ app.post('/api/owner/accounts',own,G,wrap(async(q,s)=>{const b=q.body,login=str(
  const {error}=await db.from('users').insert({role:b.role,name:b.role==='admin'?'Администратор':'Терминал',login,venue_id:q.vid,pass_hash:await bcrypt.hash(p,10)});
  if(error)return s.status(409).json({error:'Такой логин уже занят'});s.json({ok:1})}));
 app.delete('/api/owner/accounts/:id',own,G,wrap(async(q,s)=>{await db.from('users').delete().eq('id',str(q.params.id,60)).eq('venue_id',q.vid).in('role',['admin','terminal']);s.json({ok:1})}));
-app.get('/api/owner/stats',own,G,wrap(async(q,s)=>{const {data:o}=await db.from('orders').select('id,total,items,status,created_at,accepted_at,ready_at,paid,pay_method,users(nick)').neq('status','rejected').eq('venue_id',q.vid).order('id',{ascending:false});
+app.get('/api/owner/stats',own,G,wrap(async(q,s)=>{const {data:o}=await db.from('orders').select('id,total,items,status,created_at,accepted_at,ready_at,paid,pay_method,users(nick)').not('status','in','(rejected,cancelled)').eq('venue_id',q.vid).order('id',{ascending:false});
  const off=+process.env.TZ_OFFSET||6,L=d=>new Date(+new Date(d)+off*36e5),hours=Array(24).fill(0),wd=Array(7).fill(0),days={},dish={},ta=[],tr=[];let sum=0;const pay={cash:0,online:0};
  for(const r of o||[]){sum+=r.total;if(r.paid)pay[r.pay_method||'cash']+=r.total;const l=L(r.created_at);hours[l.getUTCHours()]++;wd[l.getUTCDay()]++;const k=l.toISOString().slice(0,10);days[k]=(days[k]||0)+r.total;
   r.items.forEach(i=>dish[i.name]=(dish[i.name]||0)+i.qty);if(r.accepted_at)ta.push((new Date(r.accepted_at)-new Date(r.created_at))/6e4);if(r.ready_at)tr.push((new Date(r.ready_at)-new Date(r.accepted_at))/6e4)}
@@ -105,7 +105,7 @@ app.get('/api/owner/backup',own,wrap(async(q,s)=>{const out={at:new Date()};for(
 
 // --- столы, официанты ---
 const TS=async vid=>{const [t,o]=await Promise.all([db.from('tables').select().eq('venue_id',vid).order('num'),db.from('orders').select('id,table_id,status,total,staff_name,paid,pay_method,cash_given').eq('venue_id',vid).not('table_id','is',null).in('status',['new','accepted','ready'])]);
- return (t.data||[]).map(x=>{const r=(o.data||[]).find(y=>y.table_id===x.id);return {id:x.id,num:x.num,busy:!!r,order:r?{id:r.id,status:r.status,total:r.total,waiter:r.staff_name,paid:r.paid,pay_method:r.pay_method,cash_given:r.cash_given}:null}})};
+ return (t.data||[]).map(x=>{const rs=(o.data||[]).filter(y=>y.table_id===x.id).map(r=>({id:r.id,status:r.status,total:r.total,waiter:r.staff_name,paid:r.paid,pay_method:r.pay_method,cash_given:r.cash_given})),PR={new:0,accepted:1,ready:2},top=[...rs].sort((u,v)=>PR[u.status]-PR[v.status])[0];return {id:x.id,num:x.num,busy:rs.length>0,order:top||null,orders:rs}})};
 app.get('/api/tables',wrap(async(q,s)=>s.json((await TS(+q.query.v||0)).map(t=>({id:t.id,num:t.num,busy:t.busy})))));
 app.get('/api/staff/tables',stf,wrap(async(q,s)=>s.json(await TS(q.vid))));
 app.post('/api/staff/new-order',stf,wrap(async(q,s)=>{const b=q.body,ids=(Array.isArray(b.items)?b.items:[]).slice(0,60);
@@ -115,7 +115,7 @@ app.post('/api/staff/new-order',stf,wrap(async(q,s)=>{const b=q.body,ids=(Array.
  if(!items.length)return s.status(400).json({error:'Выберите блюда'});
  let who=q.user.role==='waiter'?q.user.name:null;if(!who){const {data:st}=await db.from('staff').select('name').eq('id',+b.staff||0).eq('venue_id',q.vid).maybeSingle();who=st?.name}
  if(!who)return s.status(400).json({error:'Выберите своё имя'});
- const {data:open}=await db.from('orders').select().eq('venue_id',q.vid).eq('table_id',t.id).in('status',['new','accepted','ready']).maybeSingle();
+ const {data:opens}=await db.from('orders').select().eq('venue_id',q.vid).eq('table_id',t.id).in('status',['new','accepted','ready']).order('id',{ascending:false}).limit(1),open=opens?.[0]&&!opens[0].paid?opens[0]:null;
  let all=items;if(open){all=[...open.items];for(const i of items){const x=all.find(y=>y.id===i.id);x?x.qty+=i.qty:all.push(i)}}
  const row={items:all,total:all.reduce((a,i)=>a+i.price*i.qty,0),status:'accepted',staff_name:open?.staff_name||who,accepted_at:open?.accepted_at||new Date()};
  const {data,error}=open?await db.from('orders').update(row).eq('id',open.id).select().single():await db.from('orders').insert({...row,venue_id:q.vid,type:'dinein',table_id:t.id,point:`Стол №${t.num}`}).select().single();
@@ -158,11 +158,11 @@ app.get('/api/chat/:id',auth(...ALL),wrap(async(q,s)=>{const o=await chatOrder(q
  const {data}=await db.from('messages').select().eq('order_id',o.id).order('id');await db.from('messages').update({read:true}).eq('order_id',o.id).eq('from_client',!cl);s.json(data||[])}));
 app.post('/api/chat/:id',auth(...ALL),wrap(async(q,s)=>{const o=await chatOrder(q,+q.params.id),t=str(q.body.text,500);if(!o||!t)return s.status(400).json({error:'Пустое сообщение'});const cl=q.user.role==='customer';
  await db.from('messages').insert({order_id:o.id,from_client:cl,text:t});if(!cl&&o.user_id)await db.from('notifs').insert({user_id:o.user_id,text:`💬 Сообщение по заказу №${o.id}: ${t.slice(0,80)}`});s.json({ok:1})}));
-const TYL={takeaway:'С собой',dinein:'В заведении',delivery:'Доставка'},STL={new:'Новый',accepted:'Готовится',ready:'Готов',sent:'Отправлен',closed:'Закрыт',rejected:'Отклонён'},PYL={cash:'Наличные',online:'Онлайн'};
+const TYL={takeaway:'С собой',dinein:'В заведении',delivery:'Доставка'},STL={new:'Новый',accepted:'Готовится',ready:'Готов',sent:'Отправлен',closed:'Закрыт',rejected:'Отклонён',cancelled:'Отменён'},PYL={cash:'Наличные',online:'Онлайн'};
 app.get('/api/report.xlsx',adm,wrap(async(q,s)=>{const off=+process.env.TZ_OFFSET||6,ok=d=>/^\d{4}-\d{2}-\d{2}$/.test(d||''),f=ok(q.query.from)?q.query.from:new Date().toISOString().slice(0,10),t=ok(q.query.to)?q.query.to:f;
  const a=new Date(Date.parse(f+'T00:00:00Z')-off*36e5),b=new Date(Date.parse(t+'T00:00:00Z')+864e5-off*36e5);
  const {data:o}=await db.from('orders').select('id,created_at,type,point,address,total,paid,pay_method,status,staff_name,items,users(nick)').eq('venue_id',q.vid).gte('created_at',a.toISOString()).lt('created_at',b.toISOString()).order('id');
- const good=(o||[]).filter(x=>x.status!=='rejected'),sum=f=>good.filter(f).reduce((n,x)=>n+x.total,0),wb=new ExcelJS.Workbook(),w1=wb.addWorksheet('Итоги'),w2=wb.addWorksheet('По блюдам'),w3=wb.addWorksheet('По сотрудникам'),w4=wb.addWorksheet('Заказы');
+ const good=(o||[]).filter(x=>!['rejected','cancelled'].includes(x.status)),sum=f=>good.filter(f).reduce((n,x)=>n+x.total,0),wb=new ExcelJS.Workbook(),w1=wb.addWorksheet('Итоги'),w2=wb.addWorksheet('По блюдам'),w3=wb.addWorksheet('По сотрудникам'),w4=wb.addWorksheet('Заказы');
  w1.columns=[{header:'Показатель',width:34},{header:'Значение',width:22}];
  [['Период',f===t?f:`${f} — ${t}`],['Заказов (без отказов)',good.length],['Отклонено',(o||[]).length-good.length],['Выручка, сом',sum(()=>1)],['Оплачено наличными, сом',sum(x=>x.paid&&x.pay_method!=='online')],['Оплачено онлайн, сом',sum(x=>x.paid&&x.pay_method==='online')],['Не оплачено, сом',sum(x=>!x.paid)],['Средний чек, сом',good.length?Math.round(sum(()=>1)/good.length):0]].forEach(r=>w1.addRow(r));
  const dm={};good.forEach(x=>x.items.forEach(i=>{const k=i.name+'|'+i.price;(dm[k]=dm[k]||{n:i.name,p:i.price,q:0}).q+=i.qty}));
@@ -183,6 +183,18 @@ app.post('/api/admin/upload',adm,wrap(async(q,s)=>{const m=/^data:image\/(jpeg|p
  const path=`${q.vid}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${m[1]==='jpeg'?'jpg':m[1]}`;
  const {error}=await db.storage.from('menu').upload(path,buf,{contentType:'image/'+m[1],cacheControl:'31536000'});if(error)throw error;
  s.json({url:db.storage.from('menu').getPublicUrl(path).data.publicUrl})}));
+
+// --- гость без регистрации, отмена и правка заказа клиентом ---
+app.post('/api/guest',authRl,wrap(async(q,s)=>{const cr=require('crypto'),{data,error}=await db.from('users').insert({role:'customer',name:'Гость',nick:'Гость',login:'guest-'+cr.randomBytes(6).toString('hex'),pass_hash:await bcrypt.hash(cr.randomBytes(16).toString('hex'),8)}).select().single();if(error)throw error;s.json({token:tok(data),name:data.name,role:data.role})}));
+const editable=async q=>{const {data:o}=await db.from('orders').select('*').eq('id',+q.params.id).eq('user_id',q.user.id).maybeSingle();if(!o)return[null,'Заказ не найден'];
+ const {data:v}=await db.from('venues').select('cancel_min').eq('id',o.venue_id).maybeSingle(),lim=(v?.cancel_min??3)*6e4;
+ if(!lim)return[null,'Отмена отключена. Напишите в чат'];if(o.paid||o.pay_method==='online')return[null,'Заказ оплачен онлайн — напишите в чат, мы поможем'];
+ if(!['new','accepted'].includes(o.status))return[null,'Заказ уже готов — изменить нельзя'];if(Date.now()-new Date(o.created_at)>lim)return[null,'Время на отмену вышло. Напишите в чат или позовите официанта'];return[o]};
+app.post('/api/me/orders/:id/cancel',auth('customer'),wrap(async(q,s)=>{const [o,err]=await editable(q);if(!o)return s.status(400).json({error:err});await db.from('orders').update({status:'cancelled'}).eq('id',o.id);s.json({ok:1})}));
+app.post('/api/me/orders/:id/remove',auth('customer'),wrap(async(q,s)=>{const [o,err]=await editable(q);if(!o)return s.status(400).json({error:err});
+ const items=o.items.map(i=>i.id===+q.body.item?{...i,qty:i.qty-1}:i).filter(i=>i.qty>0);
+ if(!items.length){await db.from('orders').update({status:'cancelled'}).eq('id',o.id);return s.json({ok:1,cancelled:1})}
+ await db.from('orders').update({items,total:items.reduce((a,i)=>a+i.price*i.qty,0),edited_at:new Date()}).eq('id',o.id);s.json({ok:1})}));
 
 app.get(/^\/(app\.js|style\.css|qr\.png|plan\.jpg|sw\.js|manifest-[a-z]+\.json|icon-[a-z]+-\d+\.png)$/,(q,s)=>s.sendFile(q.params[0],{root:__dirname}));
 const pages={'/':'index.html','/staff':'staff.html','/admin':'admin.html','/owner':'owner.html','/waiter':'waiter.html'};

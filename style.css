@@ -98,3 +98,12 @@ header{padding:max(10px,env(safe-area-inset-top)) 0 10px;gap:8px}header b{flex:1
 .qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin:10px 0}.qc{background:#fff;color:#000;padding:10px;border-radius:12px;text-align:center;font-family:Arial,sans-serif}.qc svg{width:100%;height:auto;display:block}.qrs{width:min(720px,100%)!important}
 .rw{display:flex;align-items:center;gap:10px;min-width:0}.th{width:44px;height:44px;border-radius:10px;object-fit:cover;flex:none;display:grid;place-items:center;background:var(--b);font-style:normal}
 .pv{max-width:100%;max-height:180px;border-radius:12px;display:block;margin:0 auto 8px;object-fit:cover}.pv[hidden]{display:none}
+.secs{display:flex;gap:8px;overflow-x:auto;margin:6px 0 10px;scrollbar-width:none}.secs::-webkit-scrollbar{display:none}.secs .chip b{opacity:.75;margin-left:4px}.secs .dot{margin-left:6px}
+.badge.cancelled{background:#555;color:#fff}.card.s-cancelled{border-left:6px solid #777;opacity:.65}.warn{color:var(--p);font-weight:700}.it{margin:2px 0}
+/* меню в окне стола — как у клиентов */
+.modal .card.big{width:min(820px,100%)}
+.modal .chips{position:static;margin:0 0 6px;padding:4px 0 8px;top:auto;background:none}
+.modal .search input{margin:4px 0 6px}
+.sheet{max-height:50vh;overflow:auto;margin:6px 0;display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px;align-content:start}
+.sheet .dish{margin:0;padding:10px}.sheet .dm{cursor:default}.sheet .dm .pic,.sheet .dm .pic span,.sheet .dm .pic img{width:64px;height:64px}.sheet .dm{grid-template-columns:64px minmax(0,1fr)}
+.sheetbar{position:sticky;bottom:-14px;background:var(--c);padding:8px 0 2px;margin-top:6px;z-index:2}
